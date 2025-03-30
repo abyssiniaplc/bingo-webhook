@@ -46,12 +46,32 @@ const transactionSchema = new mongoose.Schema(
 
 const Transaction = mongoose.model("Transaction", transactionSchema);
 
+// User Model (your exact model)
 const userSchema = new mongoose.Schema({
-  phone: String,
+  telegramId: { type: String, required: true, unique: true },
+  fullName: { type: String, required: false },
+  phone: { type: String, required: true, unique: true },
+  password: { type: String, required: false },
+  referralCode: { type: String, unique: false },
+  tempCards: { type: [String], default: [] },
   wallet: { type: Number, default: 0, min: 0 },
+  bonus: { type: Number, default: 0, min: 0 },
+  invitedBy: { type: String },
+  transactions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
+  role: { type: String, enum: ["user", "admin"], default: "user" }
+}, { timestamps: true });
+
+userSchema.pre('save', async function (next) {
+  if (!this.isModified("password") || !this.password) return next();
+  this.password = await bcrypt.hash(this.password, 12);
+  next();
 });
 
-const User = mongoose.model("Users", userSchema);
+userSchema.methods.verifyPassword = async function(candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
+};
+
+const User = mongoose.model('Users', userSchema);
 
 // Logger setup
 const logger = winston.createLogger({
@@ -134,8 +154,10 @@ const handleDepositCallback = async (callbackData) => {
   });
 
   if (Status.toUpperCase() === "COMPLETED" && baseAmount > 0) {
-    user.wallet = (user.wallet || 0) + baseAmount;
-    await user.save({ validateBeforeSave: false });
+      user.wallet = (user.wallet || 0) + baseAmount;
+      user.transactions.push(transaction._id); // Link transaction to user
+      await user.save({ validateBeforeSave: false });
+     
     logger.info("Wallet updated for deposit", {
       userId: user._id,
       updatedWallet: user.wallet,
@@ -220,7 +242,8 @@ const handleWithdrawalCallback = async (callbackData) => {
       });
       throw new Error("Insufficient funds after withdrawal");
     }
-    user.wallet -= baseAmount;
+      user.wallet -= baseAmount;
+      user.transactions.push(transaction._id);
     await user.save();
     logger.info("Wallet updated for withdrawal", {
       userId: user._id,
